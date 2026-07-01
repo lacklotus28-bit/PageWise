@@ -1,0 +1,126 @@
+<div align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="96" alt="Pagewise icon" />
+  <h1>Pagewise</h1>
+  <p>A clean, fast EPUB reader for Windows built with Tauri and React.</p>
+
+  ![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
+  ![License](https://img.shields.io/badge/license-MIT-purple?style=flat-square)
+  ![Stack](https://img.shields.io/badge/stack-Tauri%20%2B%20React%20%2B%20TypeScript-blueviolet?style=flat-square)
+</div>
+
+---
+
+## Features
+
+**Library**
+- Import EPUB files via file picker or drag-and-drop
+- Automatic cover, title, and author extraction from EPUB metadata
+- Search by title or author, sort by recently added, title, author, or progress
+- Multi-select mode for bulk removal
+
+**Reader**
+- Renders chapter HTML directly — no WebView2 iframe sandboxing issues
+- Preserves original EPUB formatting and stylesheets
+- Inline images including SVG cover pages
+- Keyboard and click-zone navigation (arrow keys, click left/right edge)
+- Progress bar and chapter counter
+- Bookmarks — save and jump back to any chapter
+- Table of contents panel for direct chapter navigation
+- Focus mode for distraction-free reading (toggle with `F`, exit with `Esc`)
+
+**Customization**
+- Font family and font size
+- Line spacing
+- Reading column width (Narrow / Medium / Wide / Full)
+- Light, dark, and sepia themes
+
+**Reliability**
+- Corrupt, DRM-locked, or missing files show a clear error instead of hanging
+- Per-file import errors in batch drops (one bad file doesn't block the rest)
+- Author metadata sanitization handles placeholder junk from scanlation EPUBs
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Desktop shell | [Tauri](https://tauri.app/) (Rust) |
+| Frontend | React + TypeScript |
+| EPUB parsing | [epub.js](https://github.com/futurepress/epub.js/) |
+| State | [Zustand](https://github.com/pmndrs/zustand) |
+| Styling | [Tailwind CSS](https://tailwindcss.com/) |
+| Build | [Vite](https://vitejs.dev/) |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 18 or later
+- [Rust](https://rustup.rs/) (stable toolchain)
+- [Tauri prerequisites for Windows](https://tauri.app/v1/guides/getting-started/prerequisites#windows): Microsoft C++ Build Tools and WebView2
+
+### Run in development
+
+```bash
+git clone https://github.com/YOUR_USERNAME/pagewise.git
+cd pagewise
+npm install
+npm run tauri dev
+```
+
+The first build takes a few minutes while Cargo downloads and compiles dependencies. Subsequent runs are fast.
+
+### Build a release installer
+
+```bash
+npm run tauri build
+```
+
+The installer and standalone executable will be in `src-tauri/target/release/bundle/`.
+
+---
+
+## Project Structure
+
+```
+pagewise/
+├── src-tauri/          # Rust backend (Tauri config, icons, main.rs)
+└── src/
+    ├── components/
+    │   ├── Library/    # LibraryView, BookCard
+    │   ├── Reader/     # ReaderView, TocPanel, BookmarksPanel
+    │   └── Settings/   # SettingsPanel
+    ├── hooks/          # useBookImport, useFileDrop
+    ├── store/          # Zustand stores (library, settings)
+    ├── types/          # Shared TypeScript types
+    └── utils/          # Text sanitization helpers
+```
+
+---
+
+## Known Limitations
+
+- **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe, so Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. This means some advanced EPUB layouts may render differently than in a browser-based reader.
+- **No CFI-based position tracking.** Reading progress is saved at the chapter (spine index) level, not at an exact paragraph. Position is always restored to the start of the last-read chapter.
+- **No DRM support.** EPUB files protected by Adobe DRM or similar will fail to open. This is intentional.
+- **macOS / Linux not tested.** The codebase is cross-platform in principle but has only been developed and tested on Windows.
+
+---
+
+## Roadmap
+
+- [ ] In-book text search
+- [ ] Text highlights and annotations
+- [ ] Reading statistics
+- [ ] PDF support
+- [ ] Library collections / shelves
+- [ ] Metadata editor
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.

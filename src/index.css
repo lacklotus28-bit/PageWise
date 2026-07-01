@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: #0A0718;
+  }
+
+  body {
+    @apply bg-pw-950 text-pw-100;
+    margin: 0;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+}
+
+@layer utilities {
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #3D3190;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #5A42C8;
+}
+
+/* Reader content: allow text selection and style EPUB HTML */
+.reader-content {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.reader-content p {
+  margin-bottom: 1em;
+}
+
+.reader-content h1,
+.reader-content h2,
+.reader-content h3,
+.reader-content h4 {
+  font-weight: 700;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.reader-content h1 { font-size: 1.5em; }
+.reader-content h2 { font-size: 1.25em; }
+.reader-content h3 { font-size: 1.1em; }
+
+.reader-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1em auto;
+}
+
+.reader-content a {
+  text-decoration: underline;
+  opacity: 0.75;
+}
+
+.reader-content blockquote {
+  border-left: 3px solid currentColor;
+  opacity: 0.75;
+  margin-left: 0;
+  padding-left: 1em;
+}
+
+.reader-content hr {
+  border: none;
+  border-top: 1px solid currentColor;
+  opacity: 0.2;
+  margin: 2em 0;
+}
