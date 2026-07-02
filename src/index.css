@@ -92,3 +92,16 @@
   opacity: 0.2;
   margin: 2em 0;
 }
+
+/* In-book search highlights */
+.pw-match {
+  background: rgba(90, 66, 200, 0.35);
+  border-radius: 2px;
+  color: inherit;
+}
+
+.pw-match-active {
+  background: rgba(90, 66, 200, 0.75);
+  color: #ffffff;
+  border-radius: 2px;
+}

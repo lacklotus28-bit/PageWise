@@ -14,19 +14,24 @@
 
 **Library**
 - Import EPUB files via file picker or drag-and-drop
+- Concurrent import with per-file error reporting
 - Automatic cover, title, and author extraction from EPUB metadata
+- Metadata editor -- fix title, author, or cover after import
 - Search by title or author, sort by recently added, title, author, or progress
 - Multi-select mode for bulk removal
+- Reading statistics: total time, chapters read, books completed
 
 **Reader**
-- Renders chapter HTML directly — no WebView2 iframe sandboxing issues
+- Renders chapter HTML directly -- no WebView2 iframe sandboxing issues
 - Preserves original EPUB formatting and stylesheets
 - Inline images including SVG cover pages
 - Keyboard and click-zone navigation (arrow keys, click left/right edge)
-- Progress bar and chapter counter
-- Bookmarks — save and jump back to any chapter
 - Table of contents panel for direct chapter navigation
-- Focus mode for distraction-free reading (toggle with `F`, exit with `Esc`)
+- Bookmarks -- save and jump back to any chapter
+- In-book text search (Ctrl+F) with match highlighting and cycling
+- Focus mode for distraction-free reading (F to toggle, Esc to exit)
+- Progress bar and chapter counter
+- Last position restored when reopening a book
 
 **Customization**
 - Font family and font size
@@ -36,7 +41,7 @@
 
 **Reliability**
 - Corrupt, DRM-locked, or missing files show a clear error instead of hanging
-- Per-file import errors in batch drops (one bad file doesn't block the rest)
+- Per-file import errors in batch drops -- one bad file does not block the rest
 - Author metadata sanitization handles placeholder junk from scanlation EPUBs
 
 ---
@@ -90,10 +95,10 @@ pagewise/
 ├── src-tauri/          # Rust backend (Tauri config, icons, main.rs)
 └── src/
     ├── components/
-    │   ├── Library/    # LibraryView, BookCard
-    │   ├── Reader/     # ReaderView, TocPanel, BookmarksPanel
+    │   ├── Library/    # LibraryView, BookCard, MetadataEditor, StatsPanel
+    │   ├── Reader/     # ReaderView, TocPanel, BookmarksPanel, SearchBar
     │   └── Settings/   # SettingsPanel
-    ├── hooks/          # useBookImport, useFileDrop
+    ├── hooks/          # useBookImport, useFileDrop, useClickOutside
     ├── store/          # Zustand stores (library, settings)
     ├── types/          # Shared TypeScript types
     └── utils/          # Text sanitization helpers
@@ -103,24 +108,21 @@ pagewise/
 
 ## Known Limitations
 
-- **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe, so Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. This means some advanced EPUB layouts may render differently than in a browser-based reader.
-- **No CFI-based position tracking.** Reading progress is saved at the chapter (spine index) level, not at an exact paragraph. Position is always restored to the start of the last-read chapter.
-- **No DRM support.** EPUB files protected by Adobe DRM or similar will fail to open. This is intentional.
+- **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe, so Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. Some advanced EPUB layouts may render differently than in a browser-based reader.
+- **No CFI-based position tracking.** Reading progress is saved at the chapter level (spine index), not at an exact paragraph. Position is always restored to the start of the last-read chapter.
+- **No DRM support.** EPUB files protected by Adobe DRM or similar will fail to open.
 - **macOS / Linux not tested.** The codebase is cross-platform in principle but has only been developed and tested on Windows.
 
 ---
 
 ## Roadmap
 
-- [ ] In-book text search
-- [ ] Text highlights and annotations
-- [ ] Reading statistics
+- [ ] Collections / shelves
 - [ ] PDF support
-- [ ] Library collections / shelves
-- [ ] Metadata editor
+- [ ] Highlights and annotations
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT -- see [LICENSE](LICENSE) for details.

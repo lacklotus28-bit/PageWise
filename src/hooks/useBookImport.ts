@@ -12,8 +12,21 @@ export interface ImportError {
   message: string
 }
 
+export interface ImportProgress {
+  total: number
+  completed: number
+  // File names currently being read/parsed (more than one when running concurrently)
+  active: string[]
+}
+
+// How many files to process at once. EPUB parsing + cover extraction is a mix of
+// I/O and canvas work, so a small pool overlaps nicely without saturating the
+// main thread the way unlimited concurrency would.
+const IMPORT_CONCURRENCY = 3
+
 export function useBookImport() {
   const [importing, setImporting] = useState(false)
+  const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [errors, setErrors] = useState<ImportError[]>([])
   const addBook = useLibraryStore((s) => s.addBook)
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -25,22 +38,33 @@ export function useBookImport() {
 
   // Shared by both the file picker and drag-and-drop import paths.
   // Each file is processed independently so one corrupt/DRM-locked EPUB
-  // doesn't stop the rest of the batch from importing.
+  // doesn't stop the rest of the batch from importing. Files are processed
+  // through a small worker pool (IMPORT_CONCURRENCY at a time) instead of
+  // strictly one-at-a-time, since parsing/cover-extraction is mostly waiting
+  // on I/O and there's no reason file 2 can't start while file 1 is still
+  // extracting its cover.
   const importPaths = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return
 
     setImporting(true)
     const failed: ImportError[] = []
+    let completed = 0
+    const active = new Set<string>()
 
-    for (const path of paths) {
+    setProgress({ total: paths.length, completed: 0, active: [] })
+    const pushProgress = () =>
+      setProgress({ total: paths.length, completed, active: Array.from(active) })
+
+    const processOne = async (path: string) => {
       const fileName = path.split(/[\\/]/).pop() || path
-
-      if (!path.toLowerCase().endsWith('.epub')) {
-        failed.push({ fileName, message: 'Not an EPUB file' })
-        continue
-      }
+      active.add(fileName)
+      pushProgress()
 
       try {
+        if (!path.toLowerCase().endsWith('.epub')) {
+          throw new Error('NOT_EPUB')
+        }
+
         const data = await readBinaryFile(path)
         const book = ePub(data.buffer)
 
@@ -85,18 +109,38 @@ export function useBookImport() {
       } catch (err) {
         console.error('[import] failed:', fileName, err)
         const message =
-          err instanceof Error && err.message === 'Timed out opening file'
-            ? 'Took too long to open (file may be corrupt)'
-            : 'Could not read this file (corrupt or unsupported EPUB)'
+          err instanceof Error && err.message === 'NOT_EPUB'
+            ? 'Not an EPUB file'
+            : err instanceof Error && err.message === 'Timed out opening file'
+              ? 'Took too long to open (file may be corrupt)'
+              : 'Could not read this file (corrupt or unsupported EPUB)'
         failed.push({ fileName, message })
+      } finally {
+        active.delete(fileName)
+        completed += 1
+        pushProgress()
       }
     }
+
+    // Simple worker-pool: each worker pulls the next path off the shared
+    // queue as soon as it's free, so at most IMPORT_CONCURRENCY files are
+    // being read/parsed/cover-extracted at any one time.
+    let nextIndex = 0
+    const worker = async () => {
+      while (nextIndex < paths.length) {
+        const path = paths[nextIndex++]
+        await processOne(path)
+      }
+    }
+    const workerCount = Math.min(IMPORT_CONCURRENCY, paths.length)
+    await Promise.all(Array.from({ length: workerCount }, worker))
 
     if (failed.length > 0) {
       setErrors(failed)
       clearErrorsLater()
     }
     setImporting(false)
+    setProgress(null)
   }, [addBook, clearErrorsLater])
 
   const importBooks = useCallback(async () => {
@@ -120,7 +164,7 @@ export function useBookImport() {
     setErrors([])
   }, [])
 
-  return { importBooks, importPaths, importing, errors, dismissErrors }
+  return { importBooks, importPaths, importing, progress, errors, dismissErrors }
 }
 
 async function fetchToDataUrl(url: string): Promise<string> {

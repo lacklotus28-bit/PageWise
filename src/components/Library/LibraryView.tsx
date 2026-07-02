@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import BookCard from './BookCard'
-import { useLibraryStore } from '../../store/libraryStore'
+import StatsPanel from './StatsPanel'
+import { useLibraryStore, LibrarySortKey } from '../../store/libraryStore'
 import { useBookImport } from '../../hooks/useBookImport'
 import { useFileDrop } from '../../hooks/useFileDrop'
+import { useClickOutside } from '../../hooks/useClickOutside'
 import { sanitizeAuthor } from '../../utils/text'
 import { Book } from '../../types'
 
-type SortKey = 'recent' | 'title' | 'author' | 'progress'
+type SortKey = LibrarySortKey
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'recent', label: 'Recently Added' },
@@ -36,7 +38,7 @@ function EmptyState({ onImport }: { onImport: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-5 select-none">
       <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-pw-600 via-pw-500 to-pw-400 flex items-center justify-center shadow-pw-glow">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
           <path d="M2 6.5C2 5.12 3.12 4 4.5 4H11V20H4.5C3.12 20 2 18.88 2 17.5V6.5Z" fill="white" fillOpacity="0.9"/>
           <path d="M13 4H19.5C20.88 4 22 5.12 22 6.5V17.5C22 18.88 20.88 20 19.5 20H13V4Z" fill="white" fillOpacity="0.6"/>
           <rect x="11" y="4" width="2" height="16" fill="white" fillOpacity="0.3"/>
@@ -80,6 +82,38 @@ function DropOverlay() {
   )
 }
 
+function ImportProgressToast({ progress }: { progress: { total: number; completed: number; active: string[] } }) {
+  const pct = progress.total === 0 ? 0 : Math.round((progress.completed / progress.total) * 100)
+  return (
+    <div className="fixed bottom-5 right-5 z-40 w-80 rounded-xl bg-pw-800 border border-pw-600/50 shadow-2xl shadow-pw-950/80 overflow-hidden">
+      <div className="px-4 py-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-pw-300">
+            Importing {progress.completed} of {progress.total}
+          </span>
+          <span className="text-xs text-pw-400">{pct}%</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-pw-700/50 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-pw-500 to-pw-400 transition-all duration-300"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        {progress.active.length > 0 && (
+          <div className="mt-2.5 space-y-1">
+            {progress.active.map((name) => (
+              <div key={name} className="flex items-center gap-2 text-xs text-pw-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-pw-400 animate-pulse flex-shrink-0" />
+                <span className="truncate">{name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ErrorToast({ errors, onDismiss }: { errors: { fileName: string; message: string }[]; onDismiss: () => void }) {
   return (
     <div className="fixed bottom-5 right-5 z-40 w-80 rounded-xl bg-pw-800 border border-red-500/30 shadow-2xl shadow-pw-950/80 overflow-hidden">
@@ -111,13 +145,20 @@ function ErrorToast({ errors, onDismiss }: { errors: { fileName: string; message
 export default function LibraryView() {
   const books = useLibraryStore((s) => s.books)
   const removeBooks = useLibraryStore((s) => s.removeBooks)
-  const { importBooks, importPaths, importing, errors, dismissErrors } = useBookImport()
+  const query = useLibraryStore((s) => s.searchQuery)
+  const setQuery = useLibraryStore((s) => s.setSearchQuery)
+  const sortBy = useLibraryStore((s) => s.sortBy)
+  const setSortBy = useLibraryStore((s) => s.setSortBy)
+  const { importBooks, importPaths, importing, progress, errors, dismissErrors } = useBookImport()
 
-  const [query, setQuery] = useState('')
-  const [sortBy, setSortBy] = useState<SortKey>('recent')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const sortMenuRef = useRef<HTMLDivElement>(null)
+  const sortButtonRef = useRef<HTMLButtonElement>(null)
+  useClickOutside(sortMenuRef, () => setSortMenuOpen(false), sortMenuOpen, [sortButtonRef])
+
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showStats, setShowStats] = useState(false)
 
   const handleDrop = useCallback((paths: string[]) => {
     importPaths(paths)
@@ -158,6 +199,11 @@ export default function LibraryView() {
     setSelectedIds(new Set(filteredSorted.map((b) => b.id)))
   }, [filteredSorted])
 
+  // Stats view replaces the library grid
+  if (showStats) {
+    return <StatsPanel books={books} onClose={() => setShowStats(false)} />
+  }
+
   return (
     <div className="flex flex-col h-full bg-pw-950 relative">
       {/* Titlebar */}
@@ -178,20 +224,34 @@ export default function LibraryView() {
           </div>
         </div>
 
-        <button
-          className="no-drag flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={importBooks}
-          disabled={importing}
-        >
-          <span className="text-base leading-none">+</span>
-          {importing ? 'Importing...' : 'Add Books'}
-        </button>
+        <div className="no-drag flex items-center gap-2">
+          {/* Stats button */}
+          <button
+            className="p-2 rounded-lg text-pw-300 hover:text-pw-100 border border-pw-700/40 hover:border-pw-500/50 transition-colors"
+            onClick={() => setShowStats(true)}
+            title="Reading stats"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <path d="M2 12V8M6 12V5M10 12V7M14 12V3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+
+          <button
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={importBooks}
+            disabled={importing}
+          >
+            <span className="text-base leading-none">+</span>
+            {importing && progress
+              ? `Importing ${progress.completed}/${progress.total}...`
+              : 'Add Books'}
+          </button>
+        </div>
       </header>
 
-      {/* Toolbar: search + sort + select (only when there are books) */}
+      {/* Toolbar */}
       {books.length > 0 && (
         <div className="no-drag flex items-center gap-3 px-6 py-3 border-b border-pw-700/30 flex-shrink-0">
-          {/* Search */}
           <div className="relative flex-1 max-w-xs">
             <svg
               width="14" height="14" viewBox="0 0 16 16" fill="none"
@@ -209,9 +269,9 @@ export default function LibraryView() {
             />
           </div>
 
-          {/* Sort dropdown */}
-          <div className="relative">
+          <div className="relative" ref={sortMenuRef}>
             <button
+              ref={sortButtonRef}
               className="flex items-center gap-1.5 text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
               onClick={() => setSortMenuOpen((v) => !v)}
             >
@@ -226,9 +286,7 @@ export default function LibraryView() {
                   <button
                     key={opt.key}
                     className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                      sortBy === opt.key
-                        ? 'bg-pw-600/40 text-pw-50'
-                        : 'text-pw-200 hover:bg-pw-700/50'
+                      sortBy === opt.key ? 'bg-pw-600/40 text-pw-50' : 'text-pw-200 hover:bg-pw-700/50'
                     }`}
                     onClick={() => { setSortBy(opt.key); setSortMenuOpen(false) }}
                   >
@@ -241,7 +299,6 @@ export default function LibraryView() {
 
           <div className="flex-1" />
 
-          {/* Select toggle */}
           {!selectionMode ? (
             <button
               className="text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
@@ -251,10 +308,7 @@ export default function LibraryView() {
             </button>
           ) : (
             <div className="flex items-center gap-2">
-              <button
-                className="text-xs text-pw-400 hover:text-pw-100 transition-colors"
-                onClick={selectAll}
-              >
+              <button className="text-xs text-pw-400 hover:text-pw-100 transition-colors" onClick={selectAll}>
                 Select all
               </button>
               <button
@@ -268,7 +322,7 @@ export default function LibraryView() {
         </div>
       )}
 
-      {/* Content */}
+      {/* Grid */}
       <main className="flex-1 overflow-y-auto p-6 relative">
         {books.length === 0 ? (
           <EmptyState onImport={importBooks} />
@@ -287,16 +341,12 @@ export default function LibraryView() {
             ))}
           </div>
         )}
-
         {isDragging && <DropOverlay />}
       </main>
 
-      {/* Bulk action bar */}
       {selectionMode && selectedIds.size > 0 && (
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-pw-800 border border-pw-600/50 shadow-2xl shadow-pw-950/80">
-          <span className="text-sm text-pw-200">
-            {selectedIds.size} selected
-          </span>
+          <span className="text-sm text-pw-200">{selectedIds.size} selected</span>
           <button
             className="text-sm text-red-400 hover:text-red-300 transition-colors font-medium px-3 py-1 rounded-lg hover:bg-red-500/10"
             onClick={handleBulkRemove}
@@ -306,7 +356,8 @@ export default function LibraryView() {
         </div>
       )}
 
-      {errors.length > 0 && <ErrorToast errors={errors} onDismiss={dismissErrors} />}
+      {progress && <ImportProgressToast progress={progress} />}
+      {!progress && errors.length > 0 && <ErrorToast errors={errors} onDismiss={dismissErrors} />}
     </div>
   )
 }

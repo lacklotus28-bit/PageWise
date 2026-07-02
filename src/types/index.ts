@@ -1,7 +1,7 @@
 export interface Bookmark {
   id: string
   spineIndex: number
-  label: string        // auto-generated from chapter title, or user-renamed
+  label: string
   createdAt: number
 }
 
@@ -12,10 +12,13 @@ export interface Book {
   author: string
   coverUrl?: string
   addedAt: number
-  lastPosition?: string  // CFI string
+  lastPosition?: string
+  scrollOffset?: number    // 0-1 fraction scrolled within the chapter at lastPosition
   lastOpenedAt?: number
-  progress?: number      // 0-1
+  progress?: number        // 0-1
   bookmarks?: Bookmark[]
+  readingTime?: number     // total seconds spent reading
+  chaptersVisited?: number[] // unique spine indices visited
 }
 
 export type Theme = 'light' | 'dark' | 'sepia'
@@ -23,8 +26,8 @@ export type ViewMode = 'paginated' | 'scroll'
 
 export interface ReaderSettings {
   theme: Theme
-  fontSize: number       // px, e.g. 18
+  fontSize: number
   fontFamily: string
   viewMode: ViewMode
-  lineHeight: number     // e.g. 1.6
+  lineHeight: number
 }
