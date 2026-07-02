@@ -14,7 +14,7 @@
 
 **Library**
 - Import EPUB files via file picker or drag-and-drop
-- Concurrent import with per-file error reporting
+- Concurrent import with per-file error reporting and a progress toast
 - Automatic cover, title, and author extraction from EPUB metadata
 - Metadata editor -- fix title, author, or cover after import
 - Search by title or author, sort by recently added, title, author, or progress
@@ -31,7 +31,7 @@
 - In-book text search (Ctrl+F) with match highlighting and cycling
 - Focus mode for distraction-free reading (F to toggle, Esc to exit)
 - Progress bar and chapter counter
-- Last position restored when reopening a book
+- Scroll position saved and restored within each chapter when reopening a book
 
 **Customization**
 - Font family and font size
@@ -109,7 +109,6 @@ pagewise/
 ## Known Limitations
 
 - **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe, so Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. Some advanced EPUB layouts may render differently than in a browser-based reader.
-- **No CFI-based position tracking.** Reading progress is saved at the chapter level (spine index), not at an exact paragraph. Position is always restored to the start of the last-read chapter.
 - **No DRM support.** EPUB files protected by Adobe DRM or similar will fail to open.
 - **macOS / Linux not tested.** The codebase is cross-platform in principle but has only been developed and tested on Windows.
 
