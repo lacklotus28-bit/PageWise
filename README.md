@@ -10,6 +10,20 @@
 
 ---
 
+## Screenshots
+
+<div align="center">
+  <img src="screenshots/library.png" alt="Library view with shelves" width="800" />
+  <p><em>Library view with cover grid, search, sort, and shelves sidebar</em></p>
+
+  <br/>
+
+  <img src="screenshots/reader.png" alt="Reader view" width="800" />
+  <p><em>Reader with chapter navigation, progress bar, and toolbar</em></p>
+</div>
+
+---
+
 ## Features
 
 **Library**
@@ -95,6 +109,7 @@ The installer and standalone executable will be in `src-tauri/target/release/bun
 ```
 pagewise/
 ├── src-tauri/          # Rust backend (Tauri config, icons, main.rs)
+├── screenshots/        # README screenshots
 └── src/
     ├── components/
     │   ├── Library/    # LibraryView, BookCard, Sidebar, MetadataEditor, StatsPanel
