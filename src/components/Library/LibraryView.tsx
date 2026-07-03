@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import BookCard from './BookCard'
 import StatsPanel from './StatsPanel'
+import Sidebar from './Sidebar'
 import { useLibraryStore, LibrarySortKey } from '../../store/libraryStore'
 import { useBookImport } from '../../hooks/useBookImport'
 import { useFileDrop } from '../../hooks/useFileDrop'
@@ -54,6 +55,17 @@ function EmptyState({ onImport }: { onImport: () => void }) {
       >
         Browse Files
       </button>
+    </div>
+  )
+}
+
+function EmptyShelfState({ shelfName }: { shelfName: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-2 select-none">
+      <p className="text-pw-100 font-semibold text-base">{shelfName} is empty</p>
+      <p className="text-pw-400 text-sm">
+        Move books here from the card menu, or import files from this folder.
+      </p>
     </div>
   )
 }
@@ -142,6 +154,34 @@ function ErrorToast({ errors, onDismiss }: { errors: { fileName: string; message
   )
 }
 
+function DuplicateToast({ duplicates, onDismiss }: { duplicates: { fileName: string }[]; onDismiss: () => void }) {
+  return (
+    <div className="fixed bottom-5 right-5 z-40 w-80 rounded-xl bg-pw-800 border border-pw-600/50 shadow-2xl shadow-pw-950/80 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-pw-700/40">
+        <span className="text-xs font-semibold uppercase tracking-wider text-pw-300">
+          {duplicates.length} already in your library
+        </span>
+        <button
+          className="text-pw-400 hover:text-pw-100 transition-colors w-5 h-5 flex items-center justify-center rounded"
+          onClick={onDismiss}
+        >
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+            <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div className="max-h-40 overflow-y-auto py-1">
+        {duplicates.map((d, i) => (
+          <div key={i} className="px-4 py-1.5">
+            <p className="text-xs text-pw-100 truncate font-medium">{d.fileName}</p>
+            <p className="text-xs text-pw-400">Skipped — already imported</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function LibraryView() {
   const books = useLibraryStore((s) => s.books)
   const removeBooks = useLibraryStore((s) => s.removeBooks)
@@ -149,7 +189,11 @@ export default function LibraryView() {
   const setQuery = useLibraryStore((s) => s.setSearchQuery)
   const sortBy = useLibraryStore((s) => s.sortBy)
   const setSortBy = useLibraryStore((s) => s.setSortBy)
-  const { importBooks, importPaths, importing, progress, errors, dismissErrors } = useBookImport()
+  const activeCollectionId = useLibraryStore((s) => s.activeCollectionId)
+  const collections = useLibraryStore((s) => s.collections)
+  const sidebarOpen = useLibraryStore((s) => s.sidebarOpen)
+  const toggleSidebar = useLibraryStore((s) => s.toggleSidebar)
+  const { importBooks, importPaths, importing, progress, errors, dismissErrors, duplicates, dismissDuplicates } = useBookImport()
 
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const sortMenuRef = useRef<HTMLDivElement>(null)
@@ -166,16 +210,28 @@ export default function LibraryView() {
 
   const isDragging = useFileDrop(handleDrop)
 
+  const activeCollection = collections.find((c) => c.id === activeCollectionId) ?? null
+
   const filteredSorted = useMemo(() => {
+    const byCollection = activeCollectionId
+      ? books.filter((b) => b.collectionId === activeCollectionId)
+      : books
     const q = query.trim().toLowerCase()
     const filtered = q
-      ? books.filter((b) =>
+      ? byCollection.filter((b) =>
           b.title.toLowerCase().includes(q) ||
           sanitizeAuthor(b.author).toLowerCase().includes(q)
         )
-      : books
+      : byCollection
     return sortBooks(filtered, sortBy)
-  }, [books, query, sortBy])
+  }, [books, activeCollectionId, query, sortBy])
+
+  // Books in the active shelf before the search filter is applied.
+  // Used to distinguish "shelf is empty" from "search found nothing".
+  const shelfBooks = useMemo(() => {
+    if (!activeCollectionId) return books
+    return books.filter((b) => b.collectionId === activeCollectionId)
+  }, [books, activeCollectionId])
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -199,9 +255,34 @@ export default function LibraryView() {
     setSelectedIds(new Set(filteredSorted.map((b) => b.id)))
   }, [filteredSorted])
 
-  // Stats view replaces the library grid
   if (showStats) {
     return <StatsPanel books={books} onClose={() => setShowStats(false)} />
+  }
+
+  // Determine what to render in the main content area.
+  const renderGrid = () => {
+    // Case 1: whole library is empty
+    if (books.length === 0) return <EmptyState onImport={importBooks} />
+    // Case 2: a shelf is selected and has no books yet
+    if (activeCollectionId && shelfBooks.length === 0) {
+      return <EmptyShelfState shelfName={activeCollection?.name ?? 'This shelf'} />
+    }
+    // Case 3: search returned nothing
+    if (filteredSorted.length === 0) return <NoResultsState query={query} />
+    // Case 4: normal grid
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5 pb-16">
+        {filteredSorted.map((book) => (
+          <BookCard
+            key={book.id}
+            book={book}
+            selectionMode={selectionMode}
+            selected={selectedIds.has(book.id)}
+            onToggleSelect={toggleSelect}
+          />
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -219,13 +300,30 @@ export default function LibraryView() {
           <div>
             <h1 className="text-sm font-bold tracking-wide text-pw-50 leading-none">Pagewise</h1>
             <p className="text-xs text-pw-300 mt-0.5 leading-none">
-              {books.length === 0 ? 'No books' : `${books.length} ${books.length === 1 ? 'book' : 'books'}`}
+              {activeCollectionId
+                ? `${shelfBooks.length} ${shelfBooks.length === 1 ? 'book' : 'books'} · ${activeCollection?.name ?? 'Shelf'}`
+                : books.length === 0 ? 'No books' : `${books.length} ${books.length === 1 ? 'book' : 'books'}`}
             </p>
           </div>
         </div>
 
         <div className="no-drag flex items-center gap-2">
-          {/* Stats button */}
+          {books.length > 0 && (
+            <button
+              className={`p-2 rounded-lg border transition-colors ${
+                sidebarOpen
+                  ? 'text-pw-100 border-pw-500/50 bg-pw-700/30'
+                  : 'text-pw-300 hover:text-pw-100 border-pw-700/40 hover:border-pw-500/50'
+              }`}
+              onClick={toggleSidebar}
+              title={sidebarOpen ? 'Hide shelves' : 'Show shelves'}
+            >
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+                <line x1="10.5" y1="2.5" x2="10.5" y2="13.5" stroke="currentColor" strokeWidth="1.3"/>
+              </svg>
+            </button>
+          )}
           <button
             className="p-2 rounded-lg text-pw-300 hover:text-pw-100 border border-pw-700/40 hover:border-pw-500/50 transition-colors"
             onClick={() => setShowStats(true)}
@@ -235,7 +333,6 @@ export default function LibraryView() {
               <path d="M2 12V8M6 12V5M10 12V7M14 12V3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
             </svg>
           </button>
-
           <button
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={importBooks}
@@ -249,100 +346,89 @@ export default function LibraryView() {
         </div>
       </header>
 
-      {/* Toolbar */}
-      {books.length > 0 && (
-        <div className="no-drag flex items-center gap-3 px-6 py-3 border-b border-pw-700/30 flex-shrink-0">
-          <div className="relative flex-1 max-w-xs">
-            <svg
-              width="14" height="14" viewBox="0 0 16 16" fill="none"
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-pw-400 pointer-events-none"
-            >
-              <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/>
-              <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-            </svg>
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search title or author..."
-              className="w-full text-sm rounded-lg bg-pw-800/60 border border-pw-700/40 text-pw-100 placeholder:text-pw-500 pl-8 pr-3 py-1.5 focus:outline-none focus:border-pw-500/60"
-            />
-          </div>
-
-          <div className="relative" ref={sortMenuRef}>
-            <button
-              ref={sortButtonRef}
-              className="flex items-center gap-1.5 text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
-              onClick={() => setSortMenuOpen((v) => !v)}
-            >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <path d="M3 4h10M5 8h6M7 12h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-              </svg>
-              {SORT_OPTIONS.find((o) => o.key === sortBy)?.label}
-            </button>
-            {sortMenuOpen && (
-              <div className="absolute top-9 left-0 z-30 w-44 rounded-lg bg-pw-800 border border-pw-600/50 shadow-2xl overflow-hidden">
-                {SORT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.key}
-                    className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                      sortBy === opt.key ? 'bg-pw-600/40 text-pw-50' : 'text-pw-200 hover:bg-pw-700/50'
-                    }`}
-                    onClick={() => { setSortBy(opt.key); setSortMenuOpen(false) }}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+      <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col flex-1 min-w-0">
+          {/* Toolbar */}
+          {books.length > 0 && (
+            <div className="no-drag flex items-center gap-3 px-6 py-3 border-b border-pw-700/30 flex-shrink-0">
+              <div className="relative flex-1 max-w-xs">
+                <svg
+                  width="14" height="14" viewBox="0 0 16 16" fill="none"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-pw-400 pointer-events-none"
+                >
+                  <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.4"/>
+                  <path d="M11 11l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                </svg>
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search title or author..."
+                  className="w-full text-sm rounded-lg bg-pw-800/60 border border-pw-700/40 text-pw-100 placeholder:text-pw-500 pl-8 pr-3 py-1.5 focus:outline-none focus:border-pw-500/60"
+                />
               </div>
-            )}
-          </div>
 
-          <div className="flex-1" />
+              <div className="relative" ref={sortMenuRef}>
+                <button
+                  ref={sortButtonRef}
+                  className="flex items-center gap-1.5 text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
+                  onClick={() => setSortMenuOpen((v) => !v)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                    <path d="M3 4h10M5 8h6M7 12h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                  </svg>
+                  {SORT_OPTIONS.find((o) => o.key === sortBy)?.label}
+                </button>
+                {sortMenuOpen && (
+                  <div className="absolute top-9 left-0 z-30 w-44 rounded-lg bg-pw-800 border border-pw-600/50 shadow-2xl overflow-hidden">
+                    {SORT_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.key}
+                        className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                          sortBy === opt.key ? 'bg-pw-600/40 text-pw-50' : 'text-pw-200 hover:bg-pw-700/50'
+                        }`}
+                        onClick={() => { setSortBy(opt.key); setSortMenuOpen(false) }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-          {!selectionMode ? (
-            <button
-              className="text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
-              onClick={() => setSelectionMode(true)}
-            >
-              Select
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
-              <button className="text-xs text-pw-400 hover:text-pw-100 transition-colors" onClick={selectAll}>
-                Select all
-              </button>
-              <button
-                className="text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
-                onClick={exitSelectionMode}
-              >
-                Cancel
-              </button>
+              <div className="flex-1" />
+
+              {!selectionMode ? (
+                <button
+                  className="text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
+                  onClick={() => setSelectionMode(true)}
+                >
+                  Select
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button className="text-xs text-pw-400 hover:text-pw-100 transition-colors" onClick={selectAll}>
+                    Select all
+                  </button>
+                  <button
+                    className="text-sm text-pw-300 hover:text-pw-100 transition-colors px-3 py-1.5 rounded-lg border border-pw-700/40 hover:border-pw-500/50"
+                    onClick={exitSelectionMode}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
           )}
-        </div>
-      )}
 
-      {/* Grid */}
-      <main className="flex-1 overflow-y-auto p-6 relative">
-        {books.length === 0 ? (
-          <EmptyState onImport={importBooks} />
-        ) : filteredSorted.length === 0 ? (
-          <NoResultsState query={query} />
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5 pb-16">
-            {filteredSorted.map((book) => (
-              <BookCard
-                key={book.id}
-                book={book}
-                selectionMode={selectionMode}
-                selected={selectedIds.has(book.id)}
-                onToggleSelect={toggleSelect}
-              />
-            ))}
-          </div>
-        )}
-        {isDragging && <DropOverlay />}
-      </main>
+          <main className="flex-1 overflow-y-auto p-6 relative">
+            {renderGrid()}
+            {isDragging && <DropOverlay />}
+          </main>
+        </div>
+
+        {books.length > 0 && sidebarOpen && <Sidebar />}
+      </div>
 
       {selectionMode && selectedIds.size > 0 && (
         <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-pw-800 border border-pw-600/50 shadow-2xl shadow-pw-950/80">
@@ -358,6 +444,9 @@ export default function LibraryView() {
 
       {progress && <ImportProgressToast progress={progress} />}
       {!progress && errors.length > 0 && <ErrorToast errors={errors} onDismiss={dismissErrors} />}
+      {!progress && errors.length === 0 && duplicates.length > 0 && (
+        <DuplicateToast duplicates={duplicates} onDismiss={dismissDuplicates} />
+      )}
     </div>
   )
 }

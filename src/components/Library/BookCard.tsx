@@ -15,11 +15,14 @@ interface Props {
 export default function BookCard({ book, selectionMode = false, selected = false, onToggleSelect }: Props) {
   const openBook = useLibraryStore((s) => s.openBook)
   const removeBook = useLibraryStore((s) => s.removeBook)
+  const collections = useLibraryStore((s) => s.collections)
+  const moveBookToCollection = useLibraryStore((s) => s.moveBookToCollection)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [shelfSubmenuOpen, setShelfSubmenuOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
-  useClickOutside(menuRef, () => setMenuOpen(false), menuOpen, [menuButtonRef])
+  useClickOutside(menuRef, () => { setMenuOpen(false); setShelfSubmenuOpen(false) }, menuOpen, [menuButtonRef])
 
   const progressPct = book.progress ? Math.round(book.progress * 100) : 0
   const displayAuthor = sanitizeAuthor(book.author)
@@ -93,7 +96,7 @@ export default function BookCard({ book, selectionMode = false, selected = false
           {!selectionMode && menuOpen && (
             <div
               ref={menuRef}
-              className="absolute top-10 right-2 z-30 w-40 rounded-lg bg-pw-800 border border-pw-600/50 shadow-2xl overflow-hidden no-drag"
+              className="absolute top-10 right-2 z-30 w-40 rounded-lg bg-pw-800 border border-pw-600/50 shadow-2xl overflow-visible no-drag"
               onClick={(e) => e.stopPropagation()}
             >
               <button
@@ -102,6 +105,42 @@ export default function BookCard({ book, selectionMode = false, selected = false
               >
                 Edit info
               </button>
+              <div className="h-px bg-pw-700/40 mx-2" />
+              <div className="relative">
+                <button
+                  className="w-full flex items-center justify-between text-left px-3 py-2 text-sm text-pw-200 hover:bg-pw-700/60 transition-colors"
+                  onClick={() => setShelfSubmenuOpen((v) => !v)}
+                >
+                  Move to shelf
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+                    <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+                {shelfSubmenuOpen && (
+                  <div className="absolute top-0 right-full mr-1 w-40 rounded-lg bg-pw-800 border border-pw-600/50 shadow-2xl overflow-hidden max-h-56 overflow-y-auto">
+                    <button
+                      className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                        !book.collectionId ? 'text-pw-50 bg-pw-600/30' : 'text-pw-200 hover:bg-pw-700/60'
+                      }`}
+                      onClick={() => { moveBookToCollection(book.id, null); setMenuOpen(false); setShelfSubmenuOpen(false) }}
+                    >
+                      None
+                    </button>
+                    {collections.length > 0 && <div className="h-px bg-pw-700/40 mx-2" />}
+                    {collections.map((c) => (
+                      <button
+                        key={c.id}
+                        className={`w-full text-left px-3 py-2 text-sm truncate transition-colors ${
+                          book.collectionId === c.id ? 'text-pw-50 bg-pw-600/30' : 'text-pw-200 hover:bg-pw-700/60'
+                        }`}
+                        onClick={() => { moveBookToCollection(book.id, c.id); setMenuOpen(false); setShelfSubmenuOpen(false) }}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="h-px bg-pw-700/40 mx-2" />
               <button
                 className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-pw-700/60 transition-colors"

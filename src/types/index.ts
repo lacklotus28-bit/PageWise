@@ -5,6 +5,16 @@ export interface Bookmark {
   createdAt: number
 }
 
+export interface Collection {
+  id: string
+  name: string
+  createdAt: number
+  // Folder path this shelf was auto-created from, if any. Lets later imports
+  // from the same folder resolve to this shelf by path rather than by name
+  // (so renaming the shelf doesn't break future auto-grouping).
+  folderPath?: string
+}
+
 export interface Book {
   id: string
   path: string
@@ -19,6 +29,7 @@ export interface Book {
   bookmarks?: Bookmark[]
   readingTime?: number     // total seconds spent reading
   chaptersVisited?: number[] // unique spine indices visited
+  collectionId?: string    // shelf this book belongs to, if any (one shelf per book)
 }
 
 export type Theme = 'light' | 'dark' | 'sepia'

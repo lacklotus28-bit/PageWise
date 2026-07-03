@@ -24,12 +24,25 @@ export interface ImportProgress {
 // main thread the way unlimited concurrency would.
 const IMPORT_CONCURRENCY = 3
 
+export interface DuplicateNotice {
+  fileName: string
+}
+
 export function useBookImport() {
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [errors, setErrors] = useState<ImportError[]>([])
+  const [duplicates, setDuplicates] = useState<DuplicateNotice[]>([])
   const addBook = useLibraryStore((s) => s.addBook)
+  const books = useLibraryStore((s) => s.books)
+  const getOrCreateCollectionForFolder = useLibraryStore((s) => s.getOrCreateCollectionForFolder)
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const duplicateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearDuplicatesLater = useCallback(() => {
+    if (duplicateTimeoutRef.current) clearTimeout(duplicateTimeoutRef.current)
+    duplicateTimeoutRef.current = setTimeout(() => setDuplicates([]), 6000)
+  }, [])
 
   const clearErrorsLater = useCallback(() => {
     if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
@@ -48,8 +61,14 @@ export function useBookImport() {
 
     setImporting(true)
     const failed: ImportError[] = []
+    const skippedDuplicates: DuplicateNotice[] = []
     let completed = 0
     const active = new Set<string>()
+
+    // Snapshot of paths already in the library, mutated as the batch imports
+    // so two copies of the same file in one drag-drop batch also get caught,
+    // not just duplicates against books already in the library.
+    const knownPaths = new Set(books.map((b) => b.path))
 
     setProgress({ total: paths.length, completed: 0, active: [] })
     const pushProgress = () =>
@@ -57,6 +76,17 @@ export function useBookImport() {
 
     const processOne = async (path: string) => {
       const fileName = path.split(/[\\/]/).pop() || path
+
+      // Duplicate check happens before any file I/O or parsing -- cheapest
+      // possible rejection, and avoids wasted cover-extraction work.
+      if (knownPaths.has(path)) {
+        skippedDuplicates.push({ fileName })
+        completed += 1
+        pushProgress()
+        return
+      }
+      knownPaths.add(path)
+
       active.add(fileName)
       pushProgress()
 
@@ -94,6 +124,18 @@ export function useBookImport() {
         // placeholder junk like "---" in the author field instead of
         // leaving it empty. sanitizeAuthor() catches that and falls
         // back to a clean "Unknown Author" label.
+
+        // Auto-shelve by parent folder: every file resolves its shelf
+        // independently (not just within a batch), keyed by folder path so
+        // files imported today and files imported months later from the same
+        // folder still land on the same shelf, even after renames.
+        const pathParts = path.split(/[\\/]/)
+        const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : ''
+        const folderPath = pathParts.slice(0, -1).join('/')
+        const collectionId = folderName
+          ? getOrCreateCollectionForFolder(folderPath, folderName)
+          : undefined
+
         const newBook: Book = {
           id: crypto.randomUUID(),
           path,
@@ -101,6 +143,7 @@ export function useBookImport() {
           author: sanitizeAuthor(meta.creator || meta.publisher),
           coverUrl,
           addedAt: Date.now(),
+          collectionId,
         }
 
         addBook(newBook)
@@ -139,9 +182,13 @@ export function useBookImport() {
       setErrors(failed)
       clearErrorsLater()
     }
+    if (skippedDuplicates.length > 0) {
+      setDuplicates(skippedDuplicates)
+      clearDuplicatesLater()
+    }
     setImporting(false)
     setProgress(null)
-  }, [addBook, clearErrorsLater])
+  }, [addBook, books, getOrCreateCollectionForFolder, clearErrorsLater, clearDuplicatesLater])
 
   const importBooks = useCallback(async () => {
     try {
@@ -164,7 +211,21 @@ export function useBookImport() {
     setErrors([])
   }, [])
 
-  return { importBooks, importPaths, importing, progress, errors, dismissErrors }
+  const dismissDuplicates = useCallback(() => {
+    if (duplicateTimeoutRef.current) clearTimeout(duplicateTimeoutRef.current)
+    setDuplicates([])
+  }, [])
+
+  return {
+    importBooks,
+    importPaths,
+    importing,
+    progress,
+    errors,
+    dismissErrors,
+    duplicates,
+    dismissDuplicates,
+  }
 }
 
 async function fetchToDataUrl(url: string): Promise<string> {

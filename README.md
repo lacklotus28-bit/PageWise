@@ -15,14 +15,16 @@
 **Library**
 - Import EPUB files via file picker or drag-and-drop
 - Concurrent import with per-file error reporting and a progress toast
+- Duplicate detection before any file I/O
 - Automatic cover, title, and author extraction from EPUB metadata
 - Metadata editor -- fix title, author, or cover after import
+- Shelves for organizing books, auto-created from import folder names
 - Search by title or author, sort by recently added, title, author, or progress
 - Multi-select mode for bulk removal
 - Reading statistics: total time, chapters read, books completed
 
 **Reader**
-- Renders chapter HTML directly -- no WebView2 iframe sandboxing issues
+- Renders chapter HTML directly, no WebView2 iframe sandboxing issues
 - Preserves original EPUB formatting and stylesheets
 - Inline images including SVG cover pages
 - Keyboard and click-zone navigation (arrow keys, click left/right edge)
@@ -31,7 +33,7 @@
 - In-book text search (Ctrl+F) with match highlighting and cycling
 - Focus mode for distraction-free reading (F to toggle, Esc to exit)
 - Progress bar and chapter counter
-- Scroll position saved and restored within each chapter when reopening a book
+- Scroll position saved and restored within each chapter
 
 **Customization**
 - Font family and font size
@@ -95,7 +97,7 @@ pagewise/
 ├── src-tauri/          # Rust backend (Tauri config, icons, main.rs)
 └── src/
     ├── components/
-    │   ├── Library/    # LibraryView, BookCard, MetadataEditor, StatsPanel
+    │   ├── Library/    # LibraryView, BookCard, Sidebar, MetadataEditor, StatsPanel
     │   ├── Reader/     # ReaderView, TocPanel, BookmarksPanel, SearchBar
     │   └── Settings/   # SettingsPanel
     ├── hooks/          # useBookImport, useFileDrop, useClickOutside
@@ -108,7 +110,7 @@ pagewise/
 
 ## Known Limitations
 
-- **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe, so Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. Some advanced EPUB layouts may render differently than in a browser-based reader.
+- **epub.js iframe renderer is bypassed.** Tauri's WebView2 blocks scripts inside epub.js's iframe. Pagewise extracts each chapter's raw HTML and injects it directly into the DOM instead. Some advanced EPUB layouts may render differently than in a browser-based reader.
 - **No DRM support.** EPUB files protected by Adobe DRM or similar will fail to open.
 - **macOS / Linux not tested.** The codebase is cross-platform in principle but has only been developed and tested on Windows.
 
@@ -116,7 +118,6 @@ pagewise/
 
 ## Roadmap
 
-- [ ] Collections / shelves
 - [ ] PDF support
 - [ ] Highlights and annotations
 
