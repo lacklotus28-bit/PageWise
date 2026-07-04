@@ -11,6 +11,7 @@ function ShelfRow({ id, name, count }: { id: string | null; name: string; count:
   const [menuOpen, setMenuOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(name)
+  const [renameError, setRenameError] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   useClickOutside(menuRef, () => setMenuOpen(false), menuOpen, [menuButtonRef])
@@ -19,8 +20,15 @@ function ShelfRow({ id, name, count }: { id: string | null; name: string; count:
   const isAllBooks = id === null
 
   const commitRename = () => {
-    if (id) renameCollection(id, draftName)
+    if (!id) { setRenaming(false); return }
+    if (draftName.trim() === name.trim()) { setRenaming(false); setRenameError(false); return }
+    const ok = renameCollection(id, draftName)
+    if (!ok) {
+      setRenameError(true)
+      return
+    }
     setRenaming(false)
+    setRenameError(false)
   }
 
   if (renaming && id) {
@@ -29,14 +37,19 @@ function ShelfRow({ id, name, count }: { id: string | null; name: string; count:
         <input
           autoFocus
           value={draftName}
-          onChange={(e) => setDraftName(e.target.value)}
+          onChange={(e) => { setDraftName(e.target.value); setRenameError(false) }}
           onBlur={commitRename}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitRename()
-            if (e.key === 'Escape') { setDraftName(name); setRenaming(false) }
+            if (e.key === 'Escape') { setDraftName(name); setRenaming(false); setRenameError(false) }
           }}
-          className="w-full text-sm rounded-md bg-pw-800 border border-pw-500/60 text-pw-100 px-2 py-1.5 focus:outline-none"
+          className={`w-full text-sm rounded-md bg-pw-800 border text-pw-100 px-2 py-1.5 focus:outline-none ${
+            renameError ? 'border-red-500/60' : 'border-pw-500/60'
+          }`}
         />
+        {renameError && (
+          <p className="text-xs text-red-400 mt-1 px-0.5">A shelf with this name already exists</p>
+        )}
       </div>
     )
   }
@@ -111,6 +124,7 @@ export default function Sidebar() {
 
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [createError, setCreateError] = useState(false)
 
   const countsByCollection = useMemo(() => {
     const map = new Map<string, number>()
@@ -127,12 +141,16 @@ export default function Sidebar() {
 
   const commitCreate = () => {
     const name = newName.trim()
-    if (name) {
-      const id = createCollection(name)
-      setActiveCollection(id)
+    if (!name) { setCreating(false); setCreateError(false); return }
+    const id = createCollection(name)
+    if (!id) {
+      setCreateError(true)
+      return
     }
+    setActiveCollection(id)
     setNewName('')
     setCreating(false)
+    setCreateError(false)
   }
 
   return (
@@ -172,15 +190,20 @@ export default function Sidebar() {
             <input
               autoFocus
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={(e) => { setNewName(e.target.value); setCreateError(false) }}
               onBlur={commitCreate}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') commitCreate()
-                if (e.key === 'Escape') { setNewName(''); setCreating(false) }
+                if (e.key === 'Escape') { setNewName(''); setCreating(false); setCreateError(false) }
               }}
               placeholder="Shelf name..."
-              className="w-full text-sm rounded-md bg-pw-800 border border-pw-500/60 text-pw-100 placeholder:text-pw-500 px-2 py-1.5 focus:outline-none"
+              className={`w-full text-sm rounded-md bg-pw-800 border text-pw-100 placeholder:text-pw-500 px-2 py-1.5 focus:outline-none ${
+                createError ? 'border-red-500/60' : 'border-pw-500/60'
+              }`}
             />
+            {createError && (
+              <p className="text-xs text-red-400 mt-1 px-0.5">A shelf with this name already exists</p>
+            )}
           </div>
         )}
       </div>

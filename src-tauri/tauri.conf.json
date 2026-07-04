@@ -17,7 +17,19 @@
       },
       "fs": {
         "readFile": true,
-        "scope": ["**"]
+        "readDir": true,
+        "writeFile": true,
+        "createDir": true,
+        "removeFile": true,
+        "exists": true,
+        "scope": ["**", "$APPDATA/**"]
+      },
+      "path": {
+        "all": true
+      },
+      "protocol": {
+        "asset": true,
+        "assetScope": ["$APPDATA/covers/**"]
       },
       "shell": {
         "open": true

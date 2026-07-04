@@ -9,9 +9,6 @@ export interface Collection {
   id: string
   name: string
   createdAt: number
-  // Folder path this shelf was auto-created from, if any. Lets later imports
-  // from the same folder resolve to this shelf by path rather than by name
-  // (so renaming the shelf doesn't break future auto-grouping).
   folderPath?: string
 }
 
@@ -20,16 +17,26 @@ export interface Book {
   path: string
   title: string
   author: string
+  // Filename (not full path) of the cover JPEG on disk, under the app's
+  // covers directory -- see src/utils/coverStorage.ts. Kept as a bare
+  // filename rather than a base64 data URL so the persisted library JSON
+  // stays small; a book with an embedded base64 cover cost tens of KB of
+  // localStorage on every single write (even for unrelated changes like a
+  // page turn), which is what caused the app to get laggier as the library
+  // grew. Old libraries saved before this change may still have `coverUrl`
+  // set to a data: URL -- see migrateLegacyCovers in libraryStore.ts.
+  coverPath?: string
   coverUrl?: string
   addedAt: number
   lastPosition?: string
-  scrollOffset?: number    // 0-1 fraction scrolled within the chapter at lastPosition
+  scrollOffset?: number
   lastOpenedAt?: number
-  progress?: number        // 0-1
+  progress?: number
   bookmarks?: Bookmark[]
-  readingTime?: number     // total seconds spent reading
-  chaptersVisited?: number[] // unique spine indices visited
-  collectionId?: string    // shelf this book belongs to, if any (one shelf per book)
+  readingTime?: number
+  chaptersVisited?: number[]
+  collectionId?: string
+  fileType?: 'epub' | 'pdf'  // undefined treated as 'epub' for existing books
 }
 
 export type Theme = 'light' | 'dark' | 'sepia'

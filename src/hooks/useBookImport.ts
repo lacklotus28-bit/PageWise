@@ -1,134 +1,103 @@
 import { useState, useCallback, useRef } from 'react'
 import { open } from '@tauri-apps/api/dialog'
-import { readBinaryFile } from '@tauri-apps/api/fs'
+import { readBinaryFile, readDir, FileEntry } from '@tauri-apps/api/fs'
 import { appWindow } from '@tauri-apps/api/window'
-import { Book } from '../types'
 import { useLibraryStore } from '../store/libraryStore'
 import { sanitizeAuthor } from '../utils/text'
+import { saveCoverToDisk } from '../utils/coverStorage'
+import { Book } from '../types'
 import ePub from 'epubjs'
+import * as pdfjsLib from 'pdfjs-dist'
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
-export interface ImportError {
-  fileName: string
-  message: string
-}
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
 
-export interface ImportProgress {
-  total: number
-  completed: number
-  // File names currently being read/parsed (more than one when running concurrently)
-  active: string[]
-}
+export interface ImportError { fileName: string; message: string }
+export interface ImportProgress { total: number; completed: number; active: string[] }
+export interface DuplicateNotice { fileName: string }
 
-// How many files to process at once. EPUB parsing + cover extraction is a mix of
-// I/O and canvas work, so a small pool overlaps nicely without saturating the
-// main thread the way unlimited concurrency would.
 const IMPORT_CONCURRENCY = 3
-
-export interface DuplicateNotice {
-  fileName: string
-}
 
 export function useBookImport() {
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [errors, setErrors] = useState<ImportError[]>([])
   const [duplicates, setDuplicates] = useState<DuplicateNotice[]>([])
-  const addBook = useLibraryStore((s) => s.addBook)
-  const books = useLibraryStore((s) => s.books)
+  const addBooks = useLibraryStore((s) => s.addBooks)
+  // Read via getState() inside importPaths rather than subscribing with the
+  // selector hook. A large folder import flushes newly-added books to the
+  // store every ~400ms (see queueBook below), which previously changed the
+  // `books` reference and re-created importPaths (and rebuilt knownPaths)
+  // on every flush -- for a 500-book import that's over a thousand needless
+  // duplicate-Set rebuilds competing with actual parsing for main-thread time.
   const getOrCreateCollectionForFolder = useLibraryStore((s) => s.getOrCreateCollectionForFolder)
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const duplicateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const clearDuplicatesLater = useCallback(() => {
-    if (duplicateTimeoutRef.current) clearTimeout(duplicateTimeoutRef.current)
-    duplicateTimeoutRef.current = setTimeout(() => setDuplicates([]), 6000)
-  }, [])
 
   const clearErrorsLater = useCallback(() => {
     if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
     errorTimeoutRef.current = setTimeout(() => setErrors([]), 6000)
   }, [])
 
-  // Shared by both the file picker and drag-and-drop import paths.
-  // Each file is processed independently so one corrupt/DRM-locked EPUB
-  // doesn't stop the rest of the batch from importing. Files are processed
-  // through a small worker pool (IMPORT_CONCURRENCY at a time) instead of
-  // strictly one-at-a-time, since parsing/cover-extraction is mostly waiting
-  // on I/O and there's no reason file 2 can't start while file 1 is still
-  // extracting its cover.
+  const clearDuplicatesLater = useCallback(() => {
+    if (duplicateTimeoutRef.current) clearTimeout(duplicateTimeoutRef.current)
+    duplicateTimeoutRef.current = setTimeout(() => setDuplicates([]), 6000)
+  }, [])
+
   const importPaths = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return
-
     setImporting(true)
     const failed: ImportError[] = []
     const skippedDuplicates: DuplicateNotice[] = []
     let completed = 0
     const active = new Set<string>()
-
-    // Snapshot of paths already in the library, mutated as the batch imports
-    // so two copies of the same file in one drag-drop batch also get caught,
-    // not just duplicates against books already in the library.
-    const knownPaths = new Set(books.map((b) => b.path))
+    const knownPaths = new Set(useLibraryStore.getState().books.map((b) => b.path))
 
     setProgress({ total: paths.length, completed: 0, active: [] })
     const pushProgress = () =>
       setProgress({ total: paths.length, completed, active: Array.from(active) })
 
+    // Buffer newly-imported books and flush them to the store in batches
+    // instead of calling addBook() once per file. Each store update
+    // re-renders every subscribed component (library grid, sidebar,
+    // toolbar) -- for a large folder import that's a lot of redundant
+    // re-render work competing with the actual PDF/EPUB parsing for
+    // main-thread time. Flushing periodically still shows books appearing
+    // progressively, just far less often.
+    let pendingBooks: Book[] = []
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const flushPending = () => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+      if (pendingBooks.length === 0) return
+      addBooks(pendingBooks)
+      pendingBooks = []
+    }
+    const queueBook = (book: Book) => {
+      pendingBooks.push(book)
+      // Flush immediately once a small batch has built up, otherwise on a
+      // short debounce so the UI still updates promptly for small imports.
+      if (pendingBooks.length >= 8) {
+        flushPending()
+      } else if (!flushTimer) {
+        flushTimer = setTimeout(flushPending, 400)
+      }
+    }
+
     const processOne = async (path: string) => {
       const fileName = path.split(/[\\/]/).pop() || path
 
-      // Duplicate check happens before any file I/O or parsing -- cheapest
-      // possible rejection, and avoids wasted cover-extraction work.
       if (knownPaths.has(path)) {
         skippedDuplicates.push({ fileName })
-        completed += 1
-        pushProgress()
-        return
+        completed += 1; pushProgress(); return
       }
       knownPaths.add(path)
+      active.add(fileName); pushProgress()
 
-      active.add(fileName)
-      pushProgress()
+      const ext = path.split('.').pop()?.toLowerCase()
 
       try {
-        if (!path.toLowerCase().endsWith('.epub')) {
-          throw new Error('NOT_EPUB')
-        }
+        if (ext !== 'epub' && ext !== 'pdf') throw new Error('NOT_SUPPORTED')
 
-        const data = await readBinaryFile(path)
-        const book = ePub(data.buffer)
-
-        // book.ready can hang forever on a genuinely corrupt archive --
-        // race it against a timeout so the UI never gets stuck on a bad file.
-        await Promise.race([
-          book.ready,
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Timed out opening file')), 15000)
-          ),
-        ])
-
-        const meta = book.packaging.metadata
-
-        let coverUrl: string | undefined
-        try {
-          const blobUrl = await book.coverUrl()
-          if (blobUrl) {
-            const fullDataUrl = await fetchToDataUrl(blobUrl)
-            coverUrl = await resizeCover(fullDataUrl, 400)
-          }
-        } catch {
-          console.warn('[import] cover extraction failed for', fileName)
-        }
-
-        // Some EPUBs (fan/scanlation releases especially) put literal
-        // placeholder junk like "---" in the author field instead of
-        // leaving it empty. sanitizeAuthor() catches that and falls
-        // back to a clean "Unknown Author" label.
-
-        // Auto-shelve by parent folder: every file resolves its shelf
-        // independently (not just within a batch), keyed by folder path so
-        // files imported today and files imported months later from the same
-        // folder still land on the same shelf, even after renames.
         const pathParts = path.split(/[\\/]/)
         const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : ''
         const folderPath = pathParts.slice(0, -1).join('/')
@@ -136,38 +105,109 @@ export function useBookImport() {
           ? getOrCreateCollectionForFolder(folderPath, folderName)
           : undefined
 
-        const newBook: Book = {
-          id: crypto.randomUUID(),
-          path,
-          title: meta.title || fileName.replace(/\.epub$/i, ''),
-          author: sanitizeAuthor(meta.creator || meta.publisher),
-          coverUrl,
-          addedAt: Date.now(),
-          collectionId,
+        const data = await readBinaryFile(path)
+
+        if (ext === 'pdf') {
+          const loadingTask = pdfjsLib.getDocument({ data: data.buffer })
+          const pdf = await Promise.race([
+            loadingTask.promise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('timeout')), 15000)
+            ),
+          ])
+
+          const meta = await pdf.getMetadata().catch(() => ({ info: {} }))
+          const info = (meta?.info as any) ?? {}
+
+          const bookId = crypto.randomUUID()
+          let coverPath: string | undefined
+          try {
+            const page = await pdf.getPage(1)
+            // Render directly at the final thumbnail width instead of
+            // rendering once at a fixed scale and then resizing the result
+            // through a second canvas pass -- pdf.js can render straight to
+            // the target size, so there's no need to encode/decode twice.
+            const baseViewport = page.getViewport({ scale: 1 })
+            const targetWidth = 400
+            const scale = Math.min(1, targetWidth / baseViewport.width)
+            const viewport = page.getViewport({ scale })
+            const canvas = document.createElement('canvas')
+            canvas.width = viewport.width
+            canvas.height = viewport.height
+            await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+            // Written to disk (not kept as base64 in the Book record) so the
+            // persisted library JSON stays small -- see coverStorage.ts.
+            coverPath = await saveCoverToDisk(dataUrl, bookId)
+          } catch { /* skip cover */ }
+
+          queueBook({
+            id: bookId,
+            path,
+            title: info.Title || fileName.replace(/\.pdf$/i, ''),
+            author: sanitizeAuthor(info.Author),
+            coverPath,
+            addedAt: Date.now(),
+            collectionId,
+            fileType: 'pdf',
+          })
+
+          // pdf.destroy() does not exist in pdfjs-dist -- cleanup() frees
+          // resources without throwing
+          try { await pdf.cleanup() } catch { /* ignore */ }
+        } else {
+          const book = ePub(data.buffer)
+          await Promise.race([
+            book.ready,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('timeout')), 15000)
+            ),
+          ])
+
+          const meta = book.packaging.metadata
+          const bookId = crypto.randomUUID()
+          let coverPath: string | undefined
+          try {
+            const blobUrl = await book.coverUrl()
+            if (blobUrl) {
+              const fullDataUrl = await fetchToDataUrl(blobUrl)
+              const resized = await resizeCover(fullDataUrl, 400)
+              // Written to disk (not kept as base64 in the Book record) so
+              // the persisted library JSON stays small -- see coverStorage.ts.
+              coverPath = await saveCoverToDisk(resized, bookId)
+            }
+          } catch { /* skip cover */ }
+
+          queueBook({
+            id: bookId,
+            path,
+            title: meta.title || fileName.replace(/\.epub$/i, ''),
+            author: sanitizeAuthor(meta.creator || meta.publisher),
+            coverPath,
+            addedAt: Date.now(),
+            collectionId,
+            fileType: 'epub',
+          })
+          book.destroy()
         }
 
-        addBook(newBook)
-        console.log('[import] added:', newBook.title)
-        book.destroy()
+        console.log('[import] added:', fileName)
       } catch (err) {
         console.error('[import] failed:', fileName, err)
-        const message =
-          err instanceof Error && err.message === 'NOT_EPUB'
-            ? 'Not an EPUB file'
-            : err instanceof Error && err.message === 'Timed out opening file'
-              ? 'Took too long to open (file may be corrupt)'
-              : 'Could not read this file (corrupt or unsupported EPUB)'
-        failed.push({ fileName, message })
+        const msg = err instanceof Error
+          ? err.message === 'NOT_SUPPORTED'
+            ? 'Not an EPUB or PDF file'
+            : err.message === 'timeout'
+            ? 'Took too long to open (file may be corrupt)'
+            : 'Could not read this file (corrupt or unsupported)'
+          : 'Unknown error'
+        failed.push({ fileName, message: msg })
       } finally {
         active.delete(fileName)
-        completed += 1
-        pushProgress()
+        completed += 1; pushProgress()
       }
     }
 
-    // Simple worker-pool: each worker pulls the next path off the shared
-    // queue as soon as it's free, so at most IMPORT_CONCURRENCY files are
-    // being read/parsed/cover-extracted at any one time.
     let nextIndex = 0
     const worker = async () => {
       while (nextIndex < paths.length) {
@@ -178,32 +218,83 @@ export function useBookImport() {
     const workerCount = Math.min(IMPORT_CONCURRENCY, paths.length)
     await Promise.all(Array.from({ length: workerCount }, worker))
 
-    if (failed.length > 0) {
-      setErrors(failed)
-      clearErrorsLater()
-    }
-    if (skippedDuplicates.length > 0) {
-      setDuplicates(skippedDuplicates)
-      clearDuplicatesLater()
-    }
+    flushPending()
+    if (failed.length > 0) { setErrors(failed); clearErrorsLater() }
+    if (skippedDuplicates.length > 0) { setDuplicates(skippedDuplicates); clearDuplicatesLater() }
     setImporting(false)
     setProgress(null)
-  }, [addBook, books, getOrCreateCollectionForFolder, clearErrorsLater, clearDuplicatesLater])
+  }, [addBooks, getOrCreateCollectionForFolder, clearErrorsLater, clearDuplicatesLater])
 
   const importBooks = useCallback(async () => {
     try {
       await appWindow.setFocus()
-
       const selected = await open({
         multiple: true,
-        filters: [{ name: 'EPUB', extensions: ['epub'] }],
+        filters: [{ name: 'Books', extensions: ['epub', 'pdf'] }],
       })
-
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
       await importPaths(paths)
     } catch (err) {
       console.error('[import] dialog failed:', err)
     }
+  }, [importPaths])
+
+  // Opens a native "choose folder(s)" dialog, recursively scans each folder
+  // for supported files, then imports them the same way as manually-picked
+  // files. Books get auto-assigned to a shelf named after their immediate
+  // parent folder, same as drag-and-drop.
+  const importFolders = useCallback(async () => {
+    try {
+      await appWindow.setFocus()
+      const selected = await open({ multiple: true, directory: true })
+      const folderPaths = Array.isArray(selected) ? selected : selected ? [selected] : []
+      if (folderPaths.length === 0) return
+
+      setImporting(true)
+      const nestedResults = await Promise.all(
+        folderPaths.map((folderPath) =>
+          collectSupportedFilesFromFolder(folderPath).catch((err) => {
+            console.error('[import] failed to scan folder:', folderPath, err)
+            return [] as string[]
+          })
+        )
+      )
+      const filePaths = Array.from(new Set(nestedResults.flat()))
+      setImporting(false)
+
+      if (filePaths.length === 0) {
+        setErrors([{ fileName: folderPaths.map((p) => p.split(/[\\/]/).pop()).join(', '), message: 'No EPUB or PDF files found in this folder' }])
+        clearErrorsLater()
+        return
+      }
+      await importPaths(filePaths)
+    } catch (err) {
+      console.error('[import] folder dialog failed:', err)
+      setImporting(false)
+    }
+  }, [importPaths, clearErrorsLater])
+
+  // Drag-and-drop can hand us a mix of files and folders in one drop. Tauri's
+  // file-drop event gives raw paths without indicating which are folders, so
+  // each path is probed with readDir -- if that succeeds it's a folder and
+  // gets scanned recursively, otherwise it's treated as a regular file.
+  const importDroppedPaths = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return
+    setImporting(true)
+    const resolved = await Promise.all(
+      paths.map(async (path) => {
+        try {
+          const entries = await readDir(path, { recursive: true })
+          return collectSupportedFilesFromEntries(entries)
+        } catch {
+          // Not a directory (or unreadable as one) -- treat as a plain file.
+          return [path]
+        }
+      })
+    )
+    setImporting(false)
+    const filePaths = Array.from(new Set(resolved.flat()))
+    await importPaths(filePaths)
   }, [importPaths])
 
   const dismissErrors = useCallback(() => {
@@ -218,7 +309,9 @@ export function useBookImport() {
 
   return {
     importBooks,
+    importFolders,
     importPaths,
+    importDroppedPaths,
     importing,
     progress,
     errors,
@@ -239,7 +332,27 @@ async function fetchToDataUrl(url: string): Promise<string> {
   })
 }
 
-// Resize cover to max width using canvas, returns compressed JPEG data URL
+// Recursively walks a directory tree (Tauri's readDir with recursive:true
+// already returns nested `children`, this just flattens the result down to
+// a list of supported book file paths).
+async function collectSupportedFilesFromEntries(entries: FileEntry[]): Promise<string[]> {
+  const results: string[] = []
+  for (const entry of entries) {
+    if (entry.children) {
+      results.push(...(await collectSupportedFilesFromEntries(entry.children)))
+    } else if (entry.path) {
+      const ext = entry.path.split('.').pop()?.toLowerCase()
+      if (ext === 'epub' || ext === 'pdf') results.push(entry.path)
+    }
+  }
+  return results
+}
+
+async function collectSupportedFilesFromFolder(folderPath: string): Promise<string[]> {
+  const entries = await readDir(folderPath, { recursive: true })
+  return collectSupportedFilesFromEntries(entries)
+}
+
 function resizeCover(dataUrl: string, maxWidth: number): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image()
@@ -248,11 +361,10 @@ function resizeCover(dataUrl: string, maxWidth: number): Promise<string> {
       const canvas = document.createElement('canvas')
       canvas.width = Math.round(img.width * scale)
       canvas.height = Math.round(img.height * scale)
-      const ctx = canvas.getContext('2d')!
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
       resolve(canvas.toDataURL('image/jpeg', 0.85))
     }
-    img.onerror = () => resolve(dataUrl) // fallback to original if resize fails
+    img.onerror = () => resolve(dataUrl)
     img.src = dataUrl
   })
 }

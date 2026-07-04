@@ -13,6 +13,7 @@
     "@tauri-apps/api": "^1.5.0",
     "@tauri-apps/plugin-store": "^2.0.0",
     "epubjs": "^0.3.93",
+    "pdfjs-dist": "^6.1.200",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.4.7"

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import BookCard from './BookCard'
 import StatsPanel from './StatsPanel'
 import Sidebar from './Sidebar'
-import { useLibraryStore, LibrarySortKey } from '../../store/libraryStore'
+import { useLibraryStore, LibrarySortKey, LibraryFileTypeFilter } from '../../store/libraryStore'
 import { useBookImport } from '../../hooks/useBookImport'
 import { useFileDrop } from '../../hooks/useFileDrop'
 import { useClickOutside } from '../../hooks/useClickOutside'
@@ -17,6 +17,21 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'author', label: 'Author' },
   { key: 'progress', label: 'Progress' },
 ]
+
+const FILE_TYPE_OPTIONS: { key: LibraryFileTypeFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'epub', label: 'EPUB' },
+  { key: 'pdf', label: 'PDF' },
+]
+
+// Books saved before the fileType field existed have it undefined and were
+// always EPUBs at the time, so treat missing fileType as 'epub' -- same
+// convention already used elsewhere (e.g. App.tsx's isPdf check).
+function matchesFileType(book: Book, filter: LibraryFileTypeFilter): boolean {
+  if (filter === 'all') return true
+  const type = book.fileType ?? 'epub'
+  return type === filter
+}
 
 function sortBooks(books: Book[], sortBy: SortKey): Book[] {
   const sorted = [...books]
@@ -35,7 +50,7 @@ function sortBooks(books: Book[], sortBy: SortKey): Book[] {
   }
 }
 
-function EmptyState({ onImport }: { onImport: () => void }) {
+function EmptyState({ onImport, onImportFolder }: { onImport: () => void; onImportFolder: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-5 select-none">
       <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-pw-600 via-pw-500 to-pw-400 flex items-center justify-center shadow-pw-glow">
@@ -47,14 +62,22 @@ function EmptyState({ onImport }: { onImport: () => void }) {
       </div>
       <div className="text-center">
         <p className="text-pw-100 font-semibold text-base">Your library is empty</p>
-        <p className="text-pw-300 text-sm mt-1">Add your first EPUB to get started, or drag one in</p>
+        <p className="text-pw-300 text-sm mt-1">Add your first EPUB or PDF to get started, or drag one in</p>
       </div>
-      <button
-        onClick={onImport}
-        className="px-5 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/30"
-      >
-        Browse Files
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onImport}
+          className="px-5 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/30"
+        >
+          Browse Files
+        </button>
+        <button
+          onClick={onImportFolder}
+          className="px-5 py-2 rounded-lg text-pw-200 hover:text-pw-100 border border-pw-700/40 hover:border-pw-500/50 text-sm font-medium transition-colors"
+        >
+          Browse Folder
+        </button>
+      </div>
     </div>
   )
 }
@@ -70,11 +93,19 @@ function EmptyShelfState({ shelfName }: { shelfName: string }) {
   )
 }
 
-function NoResultsState({ query }: { query: string }) {
+function NoResultsState({ query, filtered }: { query: string; filtered: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-2 select-none">
-      <p className="text-pw-100 font-semibold text-base">No books match "{query}"</p>
-      <p className="text-pw-400 text-sm">Try a different search term</p>
+      <p className="text-pw-100 font-semibold text-base">
+        {query ? `No books match "${query}"` : 'No books match this filter'}
+      </p>
+      <p className="text-pw-400 text-sm">
+        {query && filtered
+          ? 'Try a different search term or file type filter'
+          : query
+          ? 'Try a different search term'
+          : 'Try a different file type filter'}
+      </p>
     </div>
   )
 }
@@ -189,11 +220,13 @@ export default function LibraryView() {
   const setQuery = useLibraryStore((s) => s.setSearchQuery)
   const sortBy = useLibraryStore((s) => s.sortBy)
   const setSortBy = useLibraryStore((s) => s.setSortBy)
+  const fileTypeFilter = useLibraryStore((s) => s.fileTypeFilter)
+  const setFileTypeFilter = useLibraryStore((s) => s.setFileTypeFilter)
   const activeCollectionId = useLibraryStore((s) => s.activeCollectionId)
   const collections = useLibraryStore((s) => s.collections)
   const sidebarOpen = useLibraryStore((s) => s.sidebarOpen)
   const toggleSidebar = useLibraryStore((s) => s.toggleSidebar)
-  const { importBooks, importPaths, importing, progress, errors, dismissErrors, duplicates, dismissDuplicates } = useBookImport()
+  const { importBooks, importFolders, importDroppedPaths, importing, progress, errors, dismissErrors, duplicates, dismissDuplicates } = useBookImport()
 
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const sortMenuRef = useRef<HTMLDivElement>(null)
@@ -205,8 +238,8 @@ export default function LibraryView() {
   const [showStats, setShowStats] = useState(false)
 
   const handleDrop = useCallback((paths: string[]) => {
-    importPaths(paths)
-  }, [importPaths])
+    importDroppedPaths(paths)
+  }, [importDroppedPaths])
 
   const isDragging = useFileDrop(handleDrop)
 
@@ -216,15 +249,16 @@ export default function LibraryView() {
     const byCollection = activeCollectionId
       ? books.filter((b) => b.collectionId === activeCollectionId)
       : books
+    const byType = byCollection.filter((b) => matchesFileType(b, fileTypeFilter))
     const q = query.trim().toLowerCase()
     const filtered = q
-      ? byCollection.filter((b) =>
+      ? byType.filter((b) =>
           b.title.toLowerCase().includes(q) ||
           sanitizeAuthor(b.author).toLowerCase().includes(q)
         )
-      : byCollection
+      : byType
     return sortBooks(filtered, sortBy)
-  }, [books, activeCollectionId, query, sortBy])
+  }, [books, activeCollectionId, query, sortBy, fileTypeFilter])
 
   // Books in the active shelf before the search filter is applied.
   // Used to distinguish "shelf is empty" from "search found nothing".
@@ -262,13 +296,13 @@ export default function LibraryView() {
   // Determine what to render in the main content area.
   const renderGrid = () => {
     // Case 1: whole library is empty
-    if (books.length === 0) return <EmptyState onImport={importBooks} />
+    if (books.length === 0) return <EmptyState onImport={importBooks} onImportFolder={importFolders} />
     // Case 2: a shelf is selected and has no books yet
     if (activeCollectionId && shelfBooks.length === 0) {
       return <EmptyShelfState shelfName={activeCollection?.name ?? 'This shelf'} />
     }
-    // Case 3: search returned nothing
-    if (filteredSorted.length === 0) return <NoResultsState query={query} />
+    // Case 3: search or file-type filter returned nothing
+    if (filteredSorted.length === 0) return <NoResultsState query={query} filtered={fileTypeFilter !== 'all'} />
     // Case 4: normal grid
     return (
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5 pb-16">
@@ -334,6 +368,17 @@ export default function LibraryView() {
             </svg>
           </button>
           <button
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-pw-300 hover:text-pw-100 border border-pw-700/40 hover:border-pw-500/50 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={importFolders}
+            disabled={importing}
+            title="Import all EPUB/PDF files from a folder (including subfolders)"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 5.5C2 4.67 2.67 4 3.5 4h3l1.5 1.5h5.5c.83 0 1.5.67 1.5 1.5v5.5c0 .83-.67 1.5-1.5 1.5h-9C2.67 14 2 13.33 2 12.5v-7z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+            </svg>
+            Add Folder
+          </button>
+          <button
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-pw-500 to-pw-400 hover:from-pw-400 hover:to-pw-300 text-white text-sm font-medium transition-all shadow-lg shadow-pw-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={importBooks}
             disabled={importing}
@@ -394,6 +439,23 @@ export default function LibraryView() {
                     ))}
                   </div>
                 )}
+              </div>
+
+              <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-pw-700/40">
+                {FILE_TYPE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.key}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      fileTypeFilter === opt.key
+                        ? 'bg-pw-600/50 text-pw-50'
+                        : 'text-pw-400 hover:text-pw-100'
+                    }`}
+                    onClick={() => setFileTypeFilter(opt.key)}
+                    title={opt.key === 'all' ? 'Show all file types' : `Show only ${opt.label} files`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
 
               <div className="flex-1" />

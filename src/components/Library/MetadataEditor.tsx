@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { Book } from '../../types'
 import { useLibraryStore } from '../../store/libraryStore'
+import { saveCoverToDisk, deleteCoverFromDisk, resolveCoverUrl } from '../../utils/coverStorage'
 
 interface Props {
   book: Book
@@ -29,8 +30,12 @@ export default function MetadataEditor({ book, onClose }: Props) {
 
   const [title, setTitle] = useState(book.title)
   const [author, setAuthor] = useState(book.author)
-  const [coverUrl, setCoverUrl] = useState(book.coverUrl ?? '')
-  const [coverPreview, setCoverPreview] = useState(book.coverUrl ?? '')
+  // pendingCoverDataUrl holds a newly-picked image (as a data URL) only in
+  // memory, for preview -- it's written to disk as a file (and only the
+  // filename kept) when the user hits Save, rather than storing base64
+  // directly on the Book record. null = "unchanged", '' = "removed".
+  const [pendingCoverDataUrl, setPendingCoverDataUrl] = useState<string | null>(null)
+  const [coverPreview, setCoverPreview] = useState(() => resolveCoverUrl(book.coverPath) ?? '')
   const [saving, setSaving] = useState(false)
   const [coverError, setCoverError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -45,7 +50,7 @@ export default function MetadataEditor({ book, onClose }: Props) {
     reader.onload = async () => {
       const raw = reader.result as string
       const resized = await resizeCover(raw, 400)
-      setCoverUrl(resized)
+      setPendingCoverDataUrl(resized)
       setCoverPreview(resized)
     }
     reader.readAsDataURL(file)
@@ -61,17 +66,30 @@ export default function MetadataEditor({ book, onClose }: Props) {
     const trimmedTitle = title.trim()
     if (!trimmedTitle) return
     setSaving(true)
+    let coverPath = book.coverPath
+    if (pendingCoverDataUrl === '') {
+      await deleteCoverFromDisk(book.coverPath)
+      coverPath = undefined
+    } else if (pendingCoverDataUrl) {
+      // Suffix with a timestamp rather than reusing `${book.id}.jpg` as-is --
+      // the webview may cache the old asset:// response for that exact path
+      // for the rest of this session, so a same-name overwrite could keep
+      // showing the previous cover until the app restarts.
+      const oldCoverPath = book.coverPath
+      coverPath = await saveCoverToDisk(pendingCoverDataUrl, `${book.id}-${Date.now()}`)
+      await deleteCoverFromDisk(oldCoverPath)
+    }
     updateBook(book.id, {
       title: trimmedTitle,
       author: author.trim(),
-      coverUrl: coverUrl || undefined,
+      coverPath,
     })
     setSaving(false)
     onClose()
-  }, [book.id, title, author, coverUrl, updateBook, onClose])
+  }, [book.id, book.coverPath, title, author, pendingCoverDataUrl, updateBook, onClose])
 
   const handleRemoveCover = useCallback(() => {
-    setCoverUrl('')
+    setPendingCoverDataUrl('')
     setCoverPreview('')
   }, [])
 

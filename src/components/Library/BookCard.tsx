@@ -1,8 +1,9 @@
-import { useState, useRef } from 'react'
+import { useMemo, useState, useRef } from 'react'
 import { Book } from '../../types'
 import { useLibraryStore } from '../../store/libraryStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { sanitizeAuthor } from '../../utils/text'
+import { resolveCoverUrl } from '../../utils/coverStorage'
 import MetadataEditor from './MetadataEditor'
 
 interface Props {
@@ -26,6 +27,13 @@ export default function BookCard({ book, selectionMode = false, selected = false
 
   const progressPct = book.progress ? Math.round(book.progress * 100) : 0
   const displayAuthor = sanitizeAuthor(book.author)
+  // Legacy libraries may still have a base64 coverUrl (pre-migration); prefer
+  // the on-disk coverPath once available, falling back so covers don't pop
+  // out during the brief window before migrateLegacyCovers() finishes.
+  const displayCoverUrl = useMemo(
+    () => resolveCoverUrl(book.coverPath) ?? book.coverUrl,
+    [book.coverPath, book.coverUrl]
+  )
 
   const handleClick = () => {
     if (selectionMode) {
@@ -49,8 +57,8 @@ export default function BookCard({ book, selectionMode = false, selected = false
             selectionMode && selected ? 'border-pw-400 ring-2 ring-pw-400' : 'border-pw-700/40'
           }`}
         >
-          {book.coverUrl ? (
-            <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
+          {displayCoverUrl ? (
+            <img src={displayCoverUrl} alt={book.title} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-pw-700 via-pw-600 to-pw-800 flex flex-col justify-end p-3">
               <span className="text-pw-100 text-xs font-semibold leading-snug line-clamp-4">{book.title}</span>

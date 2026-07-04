@@ -232,15 +232,24 @@ export default function ReaderView() {
         try {
           const sectionDir = section.href.includes('/')
             ? section.href.substring(0, section.href.lastIndexOf('/') + 1) : ''
-          const resolved = src.startsWith('/')
-            ? src.slice(1) : (sectionDir + src).replace(/\/\.\//, '/')
-          const mimeType = inferMimeType(resolved)
-          const zip = (book.archive as any).zip as any
-          const entry = zip.files[resolved] ?? zip.files['/' + resolved] ?? zip.files[resolved.replace(/^\//, '')]
-          if (!entry) return
-          const ab = await entry.async('arraybuffer') as ArrayBuffer
-          const blob = new Blob([ab], { type: mimeType })
-          const dataUrl = await blobToDataUrl(blob)
+          const relativePath = src.startsWith('/')
+            ? src.slice(1)
+            : normalizeEpubPath(sectionDir + src)
+          const mimeType = inferMimeType(relativePath)
+          // `relativePath` is relative to the OPF file's own directory (e.g.
+          // "Images/cover.jpg"), but the raw zip entries inside book.archive.zip
+          // include the OPF's containing folder in their path (e.g.
+          // "OEBPS/Images/cover.jpg" -- "OEBPS" is the conventional name but can
+          // be anything the epub's author chose, or nothing at all). Looking up
+          // `relativePath` directly in zip.files therefore misses almost every
+          // real-world epub, which nests content under such a folder. book.resolve()
+          // applies that same prefix (it's exactly what epub.js uses internally to
+          // load chapter text), and book.archive.getBase64() does the matching zip
+          // lookup, so reusing both here keeps image resolution consistent with how
+          // the rest of the book is already loaded, instead of re-deriving it by hand.
+          const archivePath = book.resolve(relativePath)
+          const dataUrl: string | undefined = await book.archive.getBase64(archivePath, mimeType)
+          if (!dataUrl) return
           const isSvgImage = el.tagName.toLowerCase() === 'image'
           if (isSvgImage) {
             el.setAttribute('xlink:href', dataUrl)
@@ -690,15 +699,6 @@ export default function ReaderView() {
   )
 }
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
-
 function inferMimeType(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   const map: Record<string, string> = {
@@ -706,6 +706,28 @@ function inferMimeType(path: string): string {
     gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', avif: 'image/avif',
   }
   return map[ext] ?? 'image/jpeg'
+}
+
+// Resolves a relative EPUB-internal path (e.g. "Text/../Images/cover.jpg",
+// produced by joining a chapter's own folder with an image's relative href)
+// down to a clean, zip-entry-matching path ("Images/cover.jpg"). The
+// previous version only stripped a literal "/./" and never touched "../"
+// segments, so any image referenced from a sibling folder with a "../" style
+// href (a common pattern in Sigil-authored EPUBs) resolved to a path that
+// didn't exist in the zip, silently failed the lookup, and left the original
+// unresolvable relative href in the DOM -- rendering as a broken image.
+function normalizeEpubPath(path: string): string {
+  const segments = path.split('/')
+  const resolved: string[] = []
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      resolved.pop()
+    } else {
+      resolved.push(segment)
+    }
+  }
+  return resolved.join('/')
 }
 
 // EPUB stylesheets are written assuming they own the whole document (selectors
