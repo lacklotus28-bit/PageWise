@@ -72,7 +72,7 @@ export default function PdfReaderView() {
       canvas.height = Math.floor(viewport.height)
 
       const ctx = canvas.getContext('2d')!
-      const task = page.render({ canvasContext: ctx, viewport })
+      const task = page.render({ canvas, canvasContext: ctx, viewport })
       renderTaskRef.current = task
       await task.promise
       if (renderTaskRef.current === task) renderTaskRef.current = null
@@ -86,14 +86,18 @@ export default function PdfReaderView() {
 
   useEffect(() => {
     if (!activeBookPath) return
+    const path = activeBookPath
     let cancelled = false
 
     async function init() {
       setLoading(true); setLoadError(null)
       try {
-        const data = await readBinaryFile(activeBookPath!)
+        const data = await readBinaryFile(path)
+        // readBinaryFile's Uint8Array.buffer is ArrayBufferLike (which
+        // includes SharedArrayBuffer); pdfjs-dist wants a plain ArrayBuffer.
+        const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
         const pdf = await Promise.race([
-          pdfjsLib.getDocument({ data: data.buffer }).promise,
+          pdfjsLib.getDocument({ data: arrayBuffer }).promise,
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('timeout')), 20000)
           ),
@@ -105,7 +109,7 @@ export default function PdfReaderView() {
         const info = (meta?.info as any) ?? {}
         setTitle(
           info.Title ||
-          activeBookPath.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ||
+          path.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ||
           'Untitled'
         )
         setTotalPages(pdf.numPages)

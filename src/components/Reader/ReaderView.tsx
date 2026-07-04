@@ -323,13 +323,17 @@ export default function ReaderView() {
 
   useEffect(() => {
     if (!activeBookPath) return
+    const path = activeBookPath
     let cancelled = false
 
     async function init() {
       setLoading(true); setLoadError(null)
       try {
-        const data = await readBinaryFile(activeBookPath!)
-        const book = ePub(data.buffer)
+        const data = await readBinaryFile(path)
+        // readBinaryFile's Uint8Array.buffer is ArrayBufferLike (which
+        // includes SharedArrayBuffer); epubjs wants a plain ArrayBuffer.
+        const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+        const book = ePub(arrayBuffer)
         bookRef.current = book
 
         await Promise.race([
@@ -343,7 +347,12 @@ export default function ReaderView() {
             .filter((item) => item.type === 'text/css')
           const chunks = await Promise.all(
             cssItems.map(async (item) => {
-              try { return await book.load(item.href) as string } catch { return '' }
+              // book.load()'s return type is typed as the generic `object`,
+              // but for a text/css manifest item it always resolves to the
+              // raw stylesheet text. Going through `unknown` first (instead
+              // of casting object -> string directly) satisfies tsc, since
+              // `object` and `string` don't otherwise overlap.
+              try { return (await book.load(item.href)) as unknown as string } catch { return '' }
             })
           )
           globalCssRef.current = chunks.filter(Boolean).join('\n')

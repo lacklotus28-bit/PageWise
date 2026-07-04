@@ -106,9 +106,14 @@ export function useBookImport() {
           : undefined
 
         const data = await readBinaryFile(path)
+        // readBinaryFile returns a Uint8Array whose .buffer is typed as
+        // ArrayBufferLike (which includes SharedArrayBuffer under newer TS
+        // lib defs), but pdfjs-dist/epubjs require a concrete ArrayBuffer.
+        // .slice() copies into a fresh, plain ArrayBuffer.
+        const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
 
         if (ext === 'pdf') {
-          const loadingTask = pdfjsLib.getDocument({ data: data.buffer })
+          const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
           const pdf = await Promise.race([
             loadingTask.promise,
             new Promise<never>((_, reject) =>
@@ -134,7 +139,7 @@ export function useBookImport() {
             const canvas = document.createElement('canvas')
             canvas.width = viewport.width
             canvas.height = viewport.height
-            await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise
+            await page.render({ canvas, canvasContext: canvas.getContext('2d')!, viewport }).promise
             const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
             // Written to disk (not kept as base64 in the Book record) so the
             // persisted library JSON stays small -- see coverStorage.ts.
@@ -156,7 +161,7 @@ export function useBookImport() {
           // resources without throwing
           try { await pdf.cleanup() } catch { /* ignore */ }
         } else {
-          const book = ePub(data.buffer)
+          const book = ePub(arrayBuffer)
           await Promise.race([
             book.ready,
             new Promise<never>((_, reject) =>
